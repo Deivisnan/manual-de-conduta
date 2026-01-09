@@ -1,0 +1,633 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { 
+  AlertTriangle, 
+  CheckCircle, 
+  XCircle, 
+  User, 
+  Shield, 
+  Gavel, 
+  FileText, 
+  Clock, 
+  ChevronRight, 
+  LogOut, 
+  Menu, 
+  Search,
+  Activity,
+  Award
+} from 'lucide-react';
+
+// --- TYPES & DATA MODELS ---
+
+type UserRole = 'MEMBER' | 'ADMIN';
+
+type InfractionLevel = 'LEVE' | 'MEDIA' | 'GRAVE' | 'GRAVISSIMA';
+
+interface InfractionRule {
+  id: string;
+  level: InfractionLevel;
+  points: number;
+  description: string;
+}
+
+interface InfractionRecord {
+  id: string;
+  userId: string;
+  ruleId: string;
+  date: string;
+  status: 'PENDING_JUSTIFICATION' | 'UNDER_REVIEW' | 'APPLIED' | 'JUSTIFIED';
+  justification?: string;
+  details?: string;
+}
+
+interface UserProfile {
+  id: string;
+  name: string;
+  role: string; // Cargo na liga
+  score: number;
+  avatar: string;
+}
+
+// --- CONFIGURAÇÃO DAS REGRAS (Baseado no Manual) ---
+
+const INFRACTION_RULES: InfractionRule[] = [
+  { id: '4.1.1', level: 'LEVE', points: 5, description: 'Não responder formulários obrigatórios' },
+  { id: '4.1.2', level: 'LEVE', points: 5, description: 'Ausência em RD com justificativa prévia' },
+  { id: '4.1.3', level: 'LEVE', points: 5, description: 'Atrasos pontuais (<15min) sem aviso' },
+  { id: '4.2.1', level: 'MEDIA', points: 15, description: 'Ausência em RG/AGE/RDEX com justificativa' },
+  { id: '4.2.2', level: 'MEDIA', points: 15, description: 'Ausência em RD sem justificativa' },
+  { id: '4.2.3', level: 'MEDIA', points: 15, description: 'Atraso em entrega com aviso' },
+  { id: '4.3.1', level: 'GRAVE', points: 30, description: 'Ausência em RG/AGE/RDEX sem justificativa' },
+  { id: '4.3.2', level: 'GRAVE', points: 30, description: 'Atraso em entrega sem justificativa (prejuízo)' },
+  { id: '4.3.3', level: 'GRAVE', points: 30, description: 'Violação Interna LGPD' },
+  { id: '4.4.1', level: 'GRAVISSIMA', points: 100, description: 'Violação Externa LGPD / Agressão / Abandono' },
+];
+
+// --- MOCK DATA ---
+
+const INITIAL_USERS: UserProfile[] = [
+  { id: 'u1', name: 'Ana Silva', role: 'Membro Trainee', score: 0, avatar: 'A' },
+  { id: 'u2', name: 'Bruno Costa', role: 'Diretor de Mkt', score: 35, avatar: 'B' },
+  { id: 'u3', name: 'Carlos Lima', role: 'Membro Efetivo', score: 65, avatar: 'C' },
+  { id: 'u4', name: 'Diana Prince', role: 'Presidente', score: 0, avatar: 'D' },
+];
+
+const INITIAL_RECORDS: InfractionRecord[] = [
+  { id: 'r1', userId: 'u2', ruleId: '4.2.2', date: '2023-10-01', status: 'APPLIED', details: 'Faltou a reunião de quarta.' },
+  { id: 'r2', userId: 'u2', ruleId: '4.2.3', date: '2023-10-15', status: 'APPLIED', details: 'Entregou o post atrasado.' },
+  { id: 'r3', userId: 'u3', ruleId: '4.3.1', date: '2023-10-20', status: 'UNDER_REVIEW', justification: 'Estava doente, segue atestado anexo.', details: 'Faltou a Assembleia Geral.' },
+  { id: 'r4', userId: 'u3', ruleId: '4.3.2', date: '2023-09-10', status: 'APPLIED', details: 'Projeto de extensão atrasado.' },
+];
+
+// --- UTILS ---
+
+const getStatusConfig = (score: number) => {
+  if (score >= 100) return { label: 'Desligamento', color: 'bg-neutral-900', text: 'text-neutral-900', ring: 'ring-neutral-900', icon: LogOut };
+  if (score >= 90) return { label: 'Risco Máximo', color: 'bg-red-600', text: 'text-red-600', ring: 'ring-red-600', icon: AlertTriangle };
+  if (score >= 60) return { label: 'Crítico', color: 'bg-orange-500', text: 'text-orange-500', ring: 'ring-orange-500', icon: Activity };
+  if (score >= 30) return { label: 'Atenção', color: 'bg-yellow-500', text: 'text-yellow-500', ring: 'ring-yellow-500', icon: Clock };
+  return { label: 'Regular', color: 'bg-emerald-500', text: 'text-emerald-500', ring: 'ring-emerald-500', icon: CheckCircle };
+};
+
+const getLevelBadge = (level: InfractionLevel) => {
+  switch (level) {
+    case 'LEVE': return 'bg-blue-100 text-blue-800 border-blue-200';
+    case 'MEDIA': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+    case 'GRAVE': return 'bg-orange-100 text-orange-800 border-orange-200';
+    case 'GRAVISSIMA': return 'bg-red-100 text-red-800 border-red-200';
+  }
+};
+
+// --- COMPONENTS ---
+
+const StatusCard = ({ score }: { score: number }) => {
+  const status = getStatusConfig(score);
+  const Icon = status.icon;
+  const percentage = Math.min(score, 100);
+
+  return (
+    <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex flex-col items-center justify-center relative overflow-hidden">
+      <div className={`absolute top-0 left-0 w-full h-2 ${status.color}`} />
+      
+      <div className="relative w-40 h-40 flex items-center justify-center">
+         {/* Circular Progress Background */}
+        <svg className="w-full h-full transform -rotate-90">
+          <circle cx="80" cy="80" r="70" stroke="currentColor" strokeWidth="10" fill="transparent" className="text-slate-100" />
+          <circle cx="80" cy="80" r="70" stroke="currentColor" strokeWidth="10" fill="transparent" 
+            strokeDasharray={440}
+            strokeDashoffset={440 - (440 * percentage) / 100}
+            className={`${status.text} transition-all duration-1000 ease-out`} 
+          />
+        </svg>
+        <div className="absolute flex flex-col items-center">
+          <span className={`text-4xl font-bold ${status.text}`}>{score}</span>
+          <span className="text-xs text-slate-400 uppercase tracking-wider">Pontos</span>
+        </div>
+      </div>
+
+      <div className="mt-4 text-center">
+        <h3 className="text-lg font-semibold text-slate-800 flex items-center justify-center gap-2">
+          <Icon size={20} className={status.text} />
+          {status.label}
+        </h3>
+        <p className="text-sm text-slate-500 mt-1">
+          {score < 30 ? 'Você está em dia com seus deveres.' : 
+           score < 60 ? 'Atenção às regras de rotina.' :
+           score < 90 ? 'Risco de suspensão de benefícios.' : 'Perigo iminente de desligamento.'}
+        </p>
+      </div>
+    </div>
+  );
+};
+
+const InfractionItem = ({ 
+  record, 
+  rule, 
+  onJustify 
+}: { 
+  record: InfractionRecord, 
+  rule: InfractionRule, 
+  onJustify?: (id: string) => void 
+}) => {
+  const isPending = record.status === 'PENDING_JUSTIFICATION';
+  
+  return (
+    <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm mb-3 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between hover:border-slate-300 transition-colors">
+      <div className="flex gap-4">
+        <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${getLevelBadge(rule.level)}`}>
+          <span className="font-bold text-sm">+{rule.points}</span>
+        </div>
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${getLevelBadge(rule.level)}`}>
+              {rule.level}
+            </span>
+            <span className="text-xs text-slate-400">{record.date}</span>
+          </div>
+          <h4 className="font-medium text-slate-800">{rule.description}</h4>
+          <p className="text-sm text-slate-500 mt-1">{record.details}</p>
+          
+          {record.status === 'UNDER_REVIEW' && (
+             <div className="mt-2 text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded inline-block">
+               ⏳ Em análise pela DEX
+             </div>
+          )}
+           {record.status === 'JUSTIFIED' && (
+             <div className="mt-2 text-xs bg-green-50 text-green-600 px-2 py-1 rounded inline-block">
+               ✅ Justificativa Aceita (Pontos anulados)
+             </div>
+          )}
+        </div>
+      </div>
+
+      {isPending && onJustify && (
+        <button 
+          onClick={() => onJustify(record.id)}
+          className="w-full sm:w-auto px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"
+        >
+          <FileText size={16} />
+          Justificar
+        </button>
+      )}
+    </div>
+  );
+};
+
+// --- APP ---
+
+export default function LiaoSystem() {
+  const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'RULES' | 'ADMIN'>('DASHBOARD');
+  const [currentUser, setCurrentUser] = useState<UserProfile>(INITIAL_USERS[0]); // Default to Ana
+  const [users, setUsers] = useState<UserProfile[]>(INITIAL_USERS);
+  const [records, setRecords] = useState<InfractionRecord[]>(INITIAL_RECORDS);
+  const [isJustifyModalOpen, setIsJustifyModalOpen] = useState(false);
+  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+  const [justificationText, setJustificationText] = useState('');
+
+  // Admin State
+  const [adminViewMode, setAdminViewMode] = useState<'USERS' | 'REVIEWS'>('USERS');
+
+  // Computed
+  const userRecords = useMemo(() => 
+    records.filter(r => r.userId === currentUser.id).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()), 
+  [records, currentUser]);
+
+  const pendingReviews = useMemo(() => 
+    records.filter(r => r.status === 'UNDER_REVIEW'),
+  [records]);
+
+  // Actions
+  const handleLoginSwitch = (userId: string) => {
+    const user = users.find(u => u.id === userId);
+    if (user) setCurrentUser(user);
+    setActiveTab(user?.id === 'u4' ? 'ADMIN' : 'DASHBOARD'); // Auto switch if President
+  };
+
+  const handleOpenJustify = (recordId: string) => {
+    setSelectedRecordId(recordId);
+    setJustificationText('');
+    setIsJustifyModalOpen(true);
+  };
+
+  const submitJustification = () => {
+    if (!selectedRecordId) return;
+    setRecords(prev => prev.map(r => 
+      r.id === selectedRecordId ? { ...r, status: 'UNDER_REVIEW', justification: justificationText } : r
+    ));
+    setIsJustifyModalOpen(false);
+  };
+
+  const handleAdminDecision = (recordId: string, accepted: boolean) => {
+    setRecords(prev => {
+      const updated = prev.map(r => {
+        if (r.id !== recordId) return r;
+        return { ...r, status: accepted ? 'JUSTIFIED' : 'APPLIED' } as InfractionRecord;
+      });
+      
+      // Recalculate score for the user involved
+      const record = prev.find(r => r.id === recordId);
+      if (record && !accepted) {
+        // Points remain (or allow logic to remove points if we were storing them temporarily)
+        // In this model, points are summed from APPLIED records. 
+        // If accepted, it becomes JUSTIFIED and points don't count.
+      }
+      return updated;
+    });
+  };
+
+  // Recalculate scores dynamically based on Applied records
+  useEffect(() => {
+    const newUsers = users.map(user => {
+      const userRecs = records.filter(r => r.userId === user.id && r.status === 'APPLIED');
+      const totalScore = userRecs.reduce((acc, r) => {
+        const rule = INFRACTION_RULES.find(rule => rule.id === r.ruleId);
+        return acc + (rule ? rule.points : 0);
+      }, 0);
+      return { ...user, score: totalScore };
+    });
+    // Only update if scores changed to avoid loop
+    if (JSON.stringify(newUsers) !== JSON.stringify(users)) {
+      setUsers(newUsers);
+      // Update current user reference if it's them
+      const updatedCurrent = newUsers.find(u => u.id === currentUser.id);
+      if (updatedCurrent) setCurrentUser(updatedCurrent);
+    }
+  }, [records]);
+
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-800">
+      
+      {/* HEADER / NAV */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
+        <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="bg-indigo-600 text-white w-8 h-8 rounded-lg flex items-center justify-center font-bold">L</div>
+            <h1 className="font-bold text-xl tracking-tight text-slate-800">LIAO <span className="text-slate-400 font-normal">Conduta</span></h1>
+          </div>
+          
+          <div className="flex items-center gap-4">
+            {/* User Switcher Simulator */}
+            <select 
+              className="bg-slate-100 border-none text-sm rounded-lg py-1 px-3"
+              value={currentUser.id}
+              onChange={(e) => handleLoginSwitch(e.target.value)}
+            >
+              {INITIAL_USERS.map(u => (
+                <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-5xl mx-auto px-4 py-8">
+        
+        {/* TAB NAVIGATION */}
+        <div className="flex gap-6 border-b border-slate-200 mb-8 overflow-x-auto">
+          <button 
+            onClick={() => setActiveTab('DASHBOARD')}
+            className={`pb-3 px-1 font-medium text-sm transition-colors ${activeTab === 'DASHBOARD' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            Meu Painel
+          </button>
+          <button 
+            onClick={() => setActiveTab('RULES')}
+            className={`pb-3 px-1 font-medium text-sm transition-colors ${activeTab === 'RULES' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            Manual de Conduta
+          </button>
+          {(currentUser.role.includes('Diretor') || currentUser.role.includes('Presidente')) && (
+            <button 
+              onClick={() => setActiveTab('ADMIN')}
+              className={`pb-3 px-1 font-medium text-sm transition-colors ${activeTab === 'ADMIN' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              Gestão DEX
+            </button>
+          )}
+        </div>
+
+        {/* --- VIEW: MEMBER DASHBOARD --- */}
+        {activeTab === 'DASHBOARD' && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            
+            {/* Left Column: Status */}
+            <div className="md:col-span-1 space-y-6">
+              <StatusCard score={currentUser.score} />
+              
+              <div className="bg-white p-5 rounded-xl border border-slate-100 shadow-sm">
+                <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Dados do Membro</h3>
+                <div className="flex items-center gap-4 mb-4">
+                  <div className="w-12 h-12 bg-slate-200 rounded-full flex items-center justify-center text-xl font-bold text-slate-500">
+                    {currentUser.avatar}
+                  </div>
+                  <div>
+                    <div className="font-bold text-slate-800">{currentUser.name}</div>
+                    <div className="text-sm text-slate-500">{currentUser.role}</div>
+                  </div>
+                </div>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between py-2 border-b border-slate-50">
+                    <span className="text-slate-500">Reset Semestral</span>
+                    <span className="font-medium">30 Jun</span>
+                  </div>
+                  <div className="flex justify-between py-2 border-b border-slate-50">
+                    <span className="text-slate-500">Status Voto</span>
+                    <span className={`font-medium ${currentUser.score >= 60 ? 'text-red-500' : 'text-green-500'}`}>
+                      {currentUser.score >= 60 ? 'Suspenso' : 'Ativo'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Redemption Call to Action */}
+              {currentUser.score > 0 && (
+                <div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-5 rounded-xl text-white shadow-lg">
+                  <div className="flex items-center gap-2 mb-2 font-semibold">
+                    <Award size={18} />
+                    Redenção
+                  </div>
+                  <p className="text-sm text-indigo-100 mb-3">
+                    Você possui pontos. Realize atividades extras para reduzir seu score.
+                  </p>
+                  <button className="w-full py-2 bg-white/20 hover:bg-white/30 backdrop-blur-sm rounded-lg text-sm font-medium transition-colors">
+                    Solicitar Atividade Extra
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Right Column: History */}
+            <div className="md:col-span-2">
+              <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center justify-between">
+                Histórico de Ocorrências
+                <span className="text-xs font-normal text-slate-500 bg-slate-100 px-2 py-1 rounded-full">Semestre 2024.1</span>
+              </h2>
+              
+              {userRecords.length === 0 ? (
+                <div className="bg-white p-12 rounded-xl border border-dashed border-slate-300 flex flex-col items-center justify-center text-slate-400">
+                  <Shield size={48} className="mb-4 text-emerald-100 text-slate-200" />
+                  <p>Nenhuma ocorrência registrada.</p>
+                  <p className="text-sm">Parabéns pela conduta exemplar!</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {userRecords.map(record => {
+                    const rule = INFRACTION_RULES.find(r => r.id === record.ruleId);
+                    if (!rule) return null;
+                    return (
+                      <InfractionItem 
+                        key={record.id} 
+                        record={record} 
+                        rule={rule} 
+                        onJustify={handleOpenJustify}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* --- VIEW: ADMIN DASHBOARD --- */}
+        {activeTab === 'ADMIN' && (
+          <div>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold text-slate-800">Gestão DEX</h2>
+              <div className="bg-slate-100 p-1 rounded-lg flex gap-1">
+                <button 
+                  onClick={() => setAdminViewMode('USERS')}
+                  className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${adminViewMode === 'USERS' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Visão Geral
+                </button>
+                <button 
+                  onClick={() => setAdminViewMode('REVIEWS')}
+                  className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${adminViewMode === 'REVIEWS' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Pendências ({pendingReviews.length})
+                </button>
+              </div>
+            </div>
+
+            {adminViewMode === 'USERS' && (
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+                    <tr>
+                      <th className="px-6 py-4">Membro</th>
+                      <th className="px-6 py-4">Cargo</th>
+                      <th className="px-6 py-4">Score</th>
+                      <th className="px-6 py-4">Status</th>
+                      <th className="px-6 py-4 text-right">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {users.map(user => {
+                      const status = getStatusConfig(user.score);
+                      return (
+                        <tr key={user.id} className="hover:bg-slate-50">
+                          <td className="px-6 py-4 font-medium text-slate-800">{user.name}</td>
+                          <td className="px-6 py-4 text-slate-500">{user.role}</td>
+                          <td className="px-6 py-4 font-bold">{user.score}</td>
+                          <td className="px-6 py-4">
+                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${status.color.replace('bg-', 'bg-opacity-10 bg-')} ${status.text} border-opacity-20`}>
+                              <div className={`w-1.5 h-1.5 rounded-full ${status.color}`} />
+                              {status.label}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                             <button className="text-indigo-600 hover:text-indigo-800 font-medium text-xs">
+                               + Infração
+                             </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {adminViewMode === 'REVIEWS' && (
+              <div className="space-y-4">
+                {pendingReviews.length === 0 ? (
+                  <div className="text-center py-12 text-slate-400">
+                    <CheckCircle size={48} className="mx-auto mb-3 text-slate-200" />
+                    <p>Tudo limpo! Nenhuma justificativa pendente.</p>
+                  </div>
+                ) : (
+                  pendingReviews.map(record => {
+                    const user = users.find(u => u.id === record.userId);
+                    const rule = INFRACTION_RULES.find(r => r.id === record.ruleId);
+                    if (!user || !rule) return null;
+
+                    return (
+                      <div key={record.id} className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                        <div className="flex justify-between items-start mb-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center font-bold text-sm">
+                              {user.avatar}
+                            </div>
+                            <div>
+                              <h3 className="font-bold text-slate-800">{user.name}</h3>
+                              <p className="text-xs text-slate-500">Solicitado em {record.date}</p>
+                            </div>
+                          </div>
+                          <div className={`px-3 py-1 rounded-full text-xs font-bold ${getLevelBadge(rule.level)}`}>
+                            {rule.level} (+{rule.points})
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-50 p-4 rounded-lg mb-6 border border-slate-100">
+                          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Infração</p>
+                          <p className="text-sm text-slate-800 mb-3">{rule.description}</p>
+                          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Justificativa do Membro</p>
+                          <p className="text-sm text-slate-700 italic">"{record.justification}"</p>
+                        </div>
+
+                        <div className="flex gap-3 justify-end">
+                          <button 
+                            onClick={() => handleAdminDecision(record.id, false)}
+                            className="px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          >
+                            Indeferir (Manter Pontos)
+                          </button>
+                          <button 
+                            onClick={() => handleAdminDecision(record.id, true)}
+                            className="px-4 py-2 text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg shadow-sm transition-colors"
+                          >
+                            Deferir (Anular Pontos)
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* --- VIEW: RULES (MANUAL) --- */}
+        {activeTab === 'RULES' && (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-8 max-w-4xl mx-auto">
+            <h2 className="text-2xl font-bold text-slate-900 mb-6">Manual de Conduta - LIAO v2.0</h2>
+            
+            <div className="prose prose-slate max-w-none">
+              <div className="mb-8">
+                <h3 className="text-lg font-bold text-indigo-900 mb-3">3. O Sistema de Pontos</h3>
+                <p className="text-slate-600 mb-2">Abandona-se o sistema fracionado. Adota-se o Score Acumulativo.</p>
+                <ul className="list-disc pl-5 text-slate-600 space-y-1">
+                  <li>Início do semestre: <strong>0 pontos</strong>.</li>
+                  <li>Limite máximo tolerado: <strong>99 pontos</strong>.</li>
+                  <li>Atingiu 100 pontos: Processo de desligamento.</li>
+                </ul>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                <div className="border-l-4 border-blue-400 pl-4 py-1">
+                  <h4 className="font-bold text-slate-800">Infrações Leves (+5)</h4>
+                  <p className="text-sm text-slate-500 mt-1">Baixo impacto. Atrasos &lt;15min, não responder forms.</p>
+                </div>
+                <div className="border-l-4 border-yellow-400 pl-4 py-1">
+                  <h4 className="font-bold text-slate-800">Infrações Médias (+15)</h4>
+                  <p className="text-sm text-slate-500 mt-1">Afeta planejamento. Ausência em RD, atraso com aviso.</p>
+                </div>
+                <div className="border-l-4 border-orange-500 pl-4 py-1">
+                  <h4 className="font-bold text-slate-800">Infrações Graves (+30)</h4>
+                  <p className="text-sm text-slate-500 mt-1">Negligência. Ausência em RG/AGE, LGPD interna.</p>
+                </div>
+                <div className="border-l-4 border-red-600 pl-4 py-1">
+                  <h4 className="font-bold text-slate-800">Gravíssimas (+100)</h4>
+                  <p className="text-sm text-slate-500 mt-1">Atos intoleráveis. Agressão, LGPD externa, Abandono.</p>
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-lg font-bold text-indigo-900 mb-3">Processo de Defesa</h3>
+                <div className="flex items-center gap-4 text-sm text-slate-600 bg-slate-50 p-4 rounded-lg">
+                  <div className="flex flex-col items-center gap-1">
+                    <span className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center font-bold">1</span>
+                    <span>Notificação</span>
+                  </div>
+                  <div className="h-0.5 bg-slate-300 w-12"></div>
+                  <div className="flex flex-col items-center gap-1">
+                    <span className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold">2</span>
+                    <span>24h p/ Justificar</span>
+                  </div>
+                  <div className="h-0.5 bg-slate-300 w-12"></div>
+                  <div className="flex flex-col items-center gap-1">
+                    <span className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center font-bold">3</span>
+                    <span>Deliberação DEX</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* MODAL: JUSTIFY */}
+      {isJustifyModalOpen && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="bg-indigo-600 p-4 text-white">
+              <h3 className="font-bold text-lg flex items-center gap-2">
+                <FileText size={20} />
+                Enviar Justificativa
+              </h3>
+            </div>
+            <div className="p-6">
+              <p className="text-sm text-slate-600 mb-4">
+                Você tem <strong>24 horas</strong> a partir da notificação para justificar. Anexe links de atestados ou provas se necessário.
+              </p>
+              <textarea
+                className="w-full border border-slate-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none h-32 resize-none"
+                placeholder="Descreva o motivo e cole links de provas aqui..."
+                value={justificationText}
+                onChange={(e) => setJustificationText(e.target.value)}
+              />
+              <div className="mt-6 flex gap-3 justify-end">
+                <button 
+                  onClick={() => setIsJustifyModalOpen(false)}
+                  className="px-4 py-2 text-slate-500 hover:bg-slate-100 rounded-lg text-sm font-medium"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={submitJustification}
+                  disabled={!justificationText.trim()}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Enviar para Análise
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
